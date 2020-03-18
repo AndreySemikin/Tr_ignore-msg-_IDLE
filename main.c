@@ -271,7 +271,8 @@ uint32_t OHBOY = 0;
 
 #define MB_ATT_ON  reg_MB[19]
 #define MB_ATT_OFF reg_MB[20]
-	
+#define MB_ERR_HANDLER reg_MB[21]	
+
 #define MB_ADR reg_MB[12]
 
 #define MB_NAME reg_MB[11]
@@ -2538,6 +2539,13 @@ void _Error_Handler(char *file, int line)
   /* User can add his own implementation to report the HAL error return state */
   while(1)
   {
+		   if (MB_ERR_HANDLER > 10000) {
+		                      MB_ERR_HANDLER = 0;
+	       }
+		
+		 else {
+	            MB_ERR_HANDLER = MB_ERR_HANDLER + 1;
+		
   }
   /* USER CODE END Error_Handler_Debug */
 }
