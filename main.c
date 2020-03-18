@@ -255,6 +255,8 @@ uint8_t now[2];
 uint8_t Flag=1;
 uint8_t FlagMB=1;
 uint8_t FlagMB2=1;
+uint8_t FlagMB3=0;
+uint8_t FlagIDLE=0;
 
 uint32_t FBI[3][10];
 uint32_t FB2[10];
@@ -269,14 +271,16 @@ uint32_t OHBOY = 0;
 
 #define MB_ATT_ON  reg_MB[19]
 #define MB_ATT_OFF reg_MB[20]
-#define MB_ERR_HANDLER reg_MB[21]
-#define MB_SPEED reg_MB[13]	
+	
 #define MB_ADR reg_MB[12]
+
 #define MB_NAME reg_MB[11]
 
-#define MB_RMS    reg_MB2[0]
+#define MB_RMS reg_MB2[0]
 #define MB_RMSMAX reg_MB2[1]
-#define MB_HZ     reg_MB2[2]
+#define MB_HZ reg_MB2[2]
+
+#define MB_SPEED reg_MB[13]
 
 #define MB_HZ_F reg_MB[10]
 #define MB_HZ_I reg_MB[18]
@@ -293,6 +297,7 @@ uint32_t OHBOY = 0;
 #define MB_AMPL_O_F reg_MB[8]
 #define MB_AMPL_O_I reg_MB[16]	
 
+
 #define MB_RMS_ZERO reg_MB[5]
 #define MB_AMPL_ZERO reg_MB[4]	
 
@@ -300,6 +305,7 @@ uint32_t OHBOY = 0;
 
 #define MB_RMS_NOW reg_MB[2]
 #define MB_AMPL_NOW reg_MB[1]	
+
 
 #define MB_RMS_T_fl  	 reg_MBf[0]
 #define MB_RMSMAX_T_fl reg_MBf[1]
@@ -824,7 +830,6 @@ void MB04(void) //поменяны местами регистры
 		}	
 	}
 	
-
 	
 	MB_RMS=IntToBCD(MB_RMS_T);
 
@@ -876,6 +881,360 @@ void MB04(void) //поменяны местами регистры
 	Max_Max=0;	
 }
 
+void IDLE_Handler(void)
+//void TIM2_IRQHandler(void)
+{
+	TIM2->CR1 &= (uint16_t)(~((uint16_t)TIM_CR1_CEN));
+	HAL_TIM_IRQHandler(&htim2);
+
+	FlagMB=1;
+
+	uint16_t ind,dt;
+	
+	uint8_t needFlashWrite=0;
+	
+	uint8_t snd_cnt=0;
+	int i;
+	if (res_buffer[0]==MB_ADR||res_buffer[0]==247)
+
+  {
+		
+		mbReinitCnt=0;
+		
+	  CRCCod=CRC16(res_buffer, (res_wr_index));	// Расчет СRC
+	  if (CRCCod==0)								// Проверка CRC в посылке
+	  {											// Если верно - выполняем действие
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_14,GPIO_PIN_SET);
+			MBPauseCnt=0;
+			if(lamp_err&Lmp10Min)
+			{
+				lamp_f=1;
+				lamp_err&=~Lmp10Min;
+			}
+		  switch (res_buffer[1]) {
+		  case 0x03:							// Чтение регистров
+		  {
+			  if (res_buffer[0]==247&&(res_buffer[2]<1) && ((res_buffer[3]+res_buffer[4]*256+res_buffer[5]-1)<30))
+			  {
+					mb_err=0;
+				  write_buffer[0]=res_buffer[0];					// Адрес устройства
+				  write_buffer[1]=0x03;						// Та-же функция
+				  write_buffer[2]=res_buffer[5]*2;			// Счетчик байт
+
+				  for (i=0; i<res_buffer[5]; i++)				// Значения регистров
+				  {
+					  write_buffer[4+(2*i)]=(reg_MB[res_buffer[2]*0x100+res_buffer[3]+i])& 0x00FF;//%256;		// Младший байт (2-ой)
+					  write_buffer[3+(2*i)]=(reg_MB[res_buffer[2]*0x100+res_buffer[3]+i])>> 8;///256;	// Старший байт (1-ый)
+				  }		
+					snd_cnt=write_buffer[2]+3;
+			  }
+				else if ((res_buffer[2]<1) && ((res_buffer[3]+res_buffer[4]*256+res_buffer[5]-12)<3))
+			  {
+					mb_err=0;
+				  write_buffer[0]=res_buffer[0];					// Адрес устройства
+				  write_buffer[1]=0x03;						// Та-же функция
+				  write_buffer[2]=res_buffer[5]*2;			// Счетчик байт
+
+				  for (i=0; i<res_buffer[5]; i++)				// Значения регистров
+				  {
+					  write_buffer[4+(2*i)]=(reg_MB[res_buffer[2]*0x100+res_buffer[3]+i])& 0x00FF;//%256;		// Младший байт (2-ой)
+					  write_buffer[3+(2*i)]=(reg_MB[res_buffer[2]*0x100+res_buffer[3]+i])>> 8;///256;	// Старший байт (1-ый)
+				  }		
+					snd_cnt=write_buffer[2]+3;
+			  }
+			  else
+			  {
+					mb_err=1;
+				  write_buffer[0]=res_buffer[0];					// адрес блока
+				  write_buffer[1]=0x83;						// та-же функция + взведенный бит ошибки
+				  write_buffer[2]=0x02;				// код ошибки - недопустимый адрес
+					snd_cnt=3;
+			  }
+			  break;
+		  }
+			case 0x04:							// Чтение регистров
+		  {
+			  if ((res_buffer[2]==1) && ((res_buffer[3]+res_buffer[4]*256+res_buffer[5]-1)<8))
+			  {
+					mb_err=0;
+					//ampl=MaxS;
+					MB04();
+
+				  write_buffer[0]=res_buffer[0];					// Адрес устройства
+				  write_buffer[1]=0x04;						// Та-же функция
+				  write_buffer[2]=res_buffer[5]*2;			// Счетчик байт
+
+				  for (i=0; i<res_buffer[5]; i++)				// Значения регистров
+				  {
+					  write_buffer[4+(2*i)]=(reg_MB2[res_buffer[2]*0x100+res_buffer[3]+i-256])%256;		// Младший байт (2-ой)
+					  write_buffer[3+(2*i)]=(reg_MB2[res_buffer[2]*0x100+res_buffer[3]+i-256])/256;	// Старший байт (1-ый)
+				  }
+		
+					snd_cnt=write_buffer[2]+3;
+			  }
+				else if ((res_buffer[2]==2) && ((res_buffer[3]+res_buffer[4]*256+res_buffer[5]-1)<8))
+			  {
+					mb_err=0;
+					//ampl=MaxS;
+					MB04();
+
+				  write_buffer[0]=res_buffer[0];					// Адрес устройства
+				  write_buffer[1]=0x04;						// Та-же функция
+				  write_buffer[2]=res_buffer[5]*2;			// Счетчик байт
+
+				  for (i=0; i<res_buffer[5]; i++)				// Значения регистров
+				  {
+					  write_buffer[4+(2*i)]=(reg_MB3[res_buffer[2]*0x100+res_buffer[3]+i-512])%256;		// Младший байт (2-ой)
+					  write_buffer[3+(2*i)]=(reg_MB3[res_buffer[2]*0x100+res_buffer[3]+i-512])/256;	// Старший байт (1-ый)
+				  }
+					
+					snd_cnt=write_buffer[2]+3;
+
+			  }
+			  else
+			  {
+					mb_err=1;
+				  write_buffer[0]=res_buffer[0];					// адрес блока
+				  write_buffer[1]=0x84;						// та-же функция + взведенный бит ошибки
+				  write_buffer[2]=0x02;				// код ошибки - недопустимый адрес
+					snd_cnt=3;
+					
+
+			  }
+			  break;
+		  }
+		  case 0x06:						//запись регистра
+		  {
+		  		if ((res_buffer[2]*0x100+res_buffer[3]>11)&&(res_buffer[2]*0x100+res_buffer[3]<14))//если возможна запись регистра
+		  		{
+						mb_err=0;
+						//uint16_t ind,dt;
+		  			write_buffer[0]=res_buffer[0];					// адрес блока
+		  			write_buffer[1]=0x06;						// та-же функция
+		  			write_buffer[2]=res_buffer[2];				// те же данные
+		  			write_buffer[3]=res_buffer[3];
+		  			write_buffer[4]=res_buffer[4];
+		  			write_buffer[5]=res_buffer[5];
+						snd_cnt=6;
+						ind=res_buffer[2]*0x100+res_buffer[3];
+						dt=res_buffer[4]*0x100+res_buffer[5];					
+						if(ind==13)
+						{
+							if(dt>8){dt=8;}
+							NeedChangeSpeed=1;
+							//USART2_ReInit(dt);
+							//MX_TIM2_Init(dt);
+						}
+						reg_MB[ind]=dt;	
+						needFlashWrite=1;
+						//Write_Flash();
+		  		}
+					else if(res_buffer[0]==247&&(((res_buffer[2]*0x100+res_buffer[3]>3)&&(res_buffer[2]*0x100+res_buffer[3]<21))||
+						(res_buffer[2]*0x100+res_buffer[3]==0)))
+					{
+						
+						mb_err=0;
+						MB04();
+						
+						reg_MB[res_buffer[3]]=res_buffer[4]*0x100+res_buffer[5];
+						
+						
+						if(res_buffer[3]==7||res_buffer[3]==9)
+						{
+							reg_MB[res_buffer[3]+8]=(MB_RMS_NOW&0x0FFF)-MB_RMS_ZERO;
+							reg_MB[res_buffer[3]+7]=(MB_AMPL_NOW&0x0FFF)-MB_AMPL_ZERO;
+							//reg_MB[res_buffer[3]-1]=res_buffer[4]*0x100+res_buffer[5];
+						}
+
+						else if(res_buffer[3]==10)
+						{
+							reg_MB[res_buffer[3]+8]=MB_HZ_1;
+						}
+						else if(res_buffer[3]==5)
+						{
+							MB_AMPL_ZERO=MB_AMPL_NOW&0x0FFF;
+							MB_RMS_ZERO=MB_RMS_NOW&0x0FFF;
+						}
+						else if(res_buffer[3]==0)
+						{
+							MB_AMPL_ZERO=0;
+							MB_RMS_ZERO=0;
+						}
+						write_buffer[0]=res_buffer[0];					// адрес блока
+						write_buffer[1]=0x06;						// та-же функция
+						write_buffer[2]=res_buffer[2];				// те же данные
+						write_buffer[3]=res_buffer[3];
+						write_buffer[4]=res_buffer[4];
+						write_buffer[5]=res_buffer[5];
+						snd_cnt=6;
+						needFlashWrite=1;
+						//Write_Flash();
+												
+					}
+					else if(res_buffer[0]==247&&res_buffer[2]==0x00&&res_buffer[3]==0x50&&res_buffer[4]==0x50&&res_buffer[5]==0x50)
+					{
+						write_buffer[0]=res_buffer[0];					// адрес блока
+						write_buffer[1]=0x06;						// та-же функция
+						write_buffer[2]=res_buffer[2];				// те же данные
+						write_buffer[3]=res_buffer[3];
+						write_buffer[4]=res_buffer[4];
+						write_buffer[5]=res_buffer[5];
+						snd_cnt=6;
+					
+						FORCE_ATT = 0x01;
+					}
+					
+					else if(res_buffer[0]==247&&res_buffer[2]==0x00&&res_buffer[3]==0x50&&res_buffer[4]==0xA0&&res_buffer[5]==0xA0)
+					{
+						write_buffer[0]=res_buffer[0];					// адрес блока
+						write_buffer[1]=0x06;						// та-же функция
+						write_buffer[2]=res_buffer[2];				// те же данные
+						write_buffer[3]=res_buffer[3];
+						write_buffer[4]=res_buffer[4];
+						write_buffer[5]=res_buffer[5];
+						snd_cnt=6;
+
+						
+						FORCE_ATT = 0x00;
+					}			
+					else if(res_buffer[0]==247&&res_buffer[2]==0x55&&res_buffer[3]==0x55&&res_buffer[4]==0x55&&res_buffer[5]==0x55)
+					{
+						write_buffer[0]=res_buffer[0];					// адрес блока
+						write_buffer[1]=0x06;						// та-же функция
+						write_buffer[2]=res_buffer[2];				// те же данные
+						write_buffer[3]=res_buffer[3];
+						write_buffer[4]=res_buffer[4];
+						write_buffer[5]=res_buffer[5];
+						snd_cnt=6;
+
+						
+						bl_flag = 1;
+					}	
+					else if(res_buffer[0]==247&&res_buffer[2]==0xFF&&res_buffer[3]==0xFF&&res_buffer[4]==0xFF&&res_buffer[5]==0xFF)
+					{
+						write_buffer[0]=res_buffer[0];					// адрес блока
+						write_buffer[1]=0x06;						// та-же функция
+						write_buffer[2]=res_buffer[2];				// те же данные
+						write_buffer[3]=res_buffer[3];
+						write_buffer[4]=res_buffer[4];
+						write_buffer[5]=res_buffer[5];
+						snd_cnt=6;						
+						Erase_Flash();
+					}	
+					
+		  		else
+		  		{
+						mb_err=1;
+		  			write_buffer[0]=res_buffer[0];					// адрес устройства
+		  			write_buffer[1]=0x86;						// та-же функция
+		  			write_buffer[2]=0x02;				// код ошибки - недопустимый адрес
+						snd_cnt=3;
+
+		  		}
+
+		  		  	break;
+		  }
+			case 0x10:
+			{
+				if(res_buffer[0]==247&&res_buffer[2]==0&&(res_buffer[3]==6||res_buffer[3]==8)&&res_buffer[4]==0&&res_buffer[5]==2
+					&&res_buffer[6]==4)
+				{
+					write_buffer[0]=res_buffer[0];					// Адрес устройства
+					write_buffer[1]=res_buffer[1];						// Та-же функция
+					write_buffer[2]=res_buffer[2];		
+					write_buffer[3]=res_buffer[3];
+					write_buffer[4]=res_buffer[4];
+					write_buffer[5]=res_buffer[5];
+					reg_MB[res_buffer[3]+9]=(MB_RMS_NOW&0x0FFF)-MB_RMS_ZERO;
+					reg_MB[res_buffer[3]+8]=(MB_AMPL_NOW&0x0FFF)-MB_AMPL_ZERO;
+					reg_MB[res_buffer[3]]=res_buffer[7]*0x100+res_buffer[8];
+					reg_MB[res_buffer[3]+1]=res_buffer[9]*0x100+res_buffer[10];
+					snd_cnt=6;
+					needFlashWrite=1;
+					//Write_Flash();
+				}
+				else
+				{
+					mb_err=1;
+					write_buffer[0]=res_buffer[0];					// адрес устройства
+					write_buffer[1]=0x90;						// та-же функция
+					write_buffer[2]=0x02;				// код ошибки - недопустимый адрес
+					snd_cnt=3;
+
+				}	
+				break;
+			}
+	
+			case 0x45:
+			{
+				
+				write_buffer[0]=res_buffer[0];					// адрес блока
+				write_buffer[1]=res_buffer[1];						// та-же функция 
+				write_buffer[2]=res_buffer[2];						// та-же функция 
+				snd_cnt=3;
+
+				if(res_buffer[0]==247)
+				{
+					FORCE_ATT = res_buffer[2];
+				}
+				
+				//HAL_UART_Transmit(&huart2,write_buffer,5,100);
+				break;
+			}
+			default:
+			{
+				mb_err=1;
+				write_buffer[0]=res_buffer[0];					// адрес блока
+				write_buffer[1]=res_buffer[1]+0x80;						// та-же функция + взведенный бит ошибки
+				write_buffer[2]=0x01;				// код ошибки - недопустимая функция
+				snd_cnt=3;
+
+				break;
+			}
+	  }
+			CRCCod=CRC16(write_buffer, snd_cnt);				// расчет CRC
+
+			write_buffer[snd_cnt] = CRCCod & 0x00FF;			// мл. байт CRC
+			write_buffer[snd_cnt+1] = CRCCod >> 8;				// ст. байт CRC
+			HAL_UART_Transmit(&huart2,write_buffer,snd_cnt+2,100);
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_14,GPIO_PIN_RESET);
+		
+			if(NeedChangeSpeed)
+			{
+				NeedChangeSpeed=0;
+				USART2_ReInit(dt);
+				MX_TIM2_Init(dt);
+			}
+			if(needFlashWrite)
+			{
+				needFlashWrite=0;
+				Write_Flash();
+			}
+	  }
+
+  }
+//HAL_UART_Transmit(&huart2,res_buffer,res_wr_index,100);
+	
+	if(mb_err!=mb_err_prev)
+	{
+		mb_err_prev=mb_err;
+		if(mb_err)
+		{
+			lamp_f=1;
+			lamp_err|=LmpCnnct;
+		}
+		else
+		{
+			lamp_f=1;
+			lamp_err&=~LmpCnnct;
+		}
+	}
+  res_wr_index=0;
+	 HAL_NVIC_SetPriority(USART2_IRQn, 0, 1);
+    HAL_NVIC_EnableIRQ(USART2_IRQn);
+	__HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE);
+		__HAL_UART_ENABLE_IT(&huart2, UART_IT_IDLE);
+}
 
 void Flash_Jump_Adress(uint32_t adress)															// Переход в область другой программы во флеш памяти
 {
@@ -962,8 +1321,8 @@ void My_Jump_Boatloader(void)
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-	__set_PRIMASK(1);											// Отключаем глобальные прерывания	
-	SCB->VTOR = (uint32_t)0x08002800;  		// Переопределяем начало таблицы векторов прерываний 
+	__set_PRIMASK(1);									  											// Отключаем глобальные прерывания	
+	SCB->VTOR = (uint32_t)0x08002800;  												// Переопределяем начало таблицы векторов прерываний 
 	__set_PRIMASK(0);
   /* USER CODE END 1 */
 
@@ -973,7 +1332,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+	
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -998,8 +1357,6 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-	
-
 	
 	MB_AMPL_ZERO=0;
 	MB_RMS_ZERO=0;
@@ -1026,11 +1383,10 @@ int main(void)
 	MB_ATT_ON=0x0FA0;
 	MB_ATT_OFF=0x00FA;
 	
-	MB_ERR_HANDLER = 0;
-	
 	FBI[0][0]=FLASH_Read(FlAdr);
 	uint8_t k, rightData;
-		
+	
+	
 	if((FBI[0][0]==0)||(FBI[0][0]==0xFFFFFFFF))
 	{
 		rightData=4; //wrong data - need write default
@@ -1104,16 +1460,11 @@ int main(void)
 		MB_HZ_F=8001;
 		Write_Flash();
 	}
-	
-	
-	//MB_HZ_I=FBI[5]>>16;
-	//MB_HZ_F=FBI[5]&0x0000FFFF;
-	
-	
+
 	NVIC_SetPriority(USART2_IRQn, 0); 
   NVIC_EnableIRQ(USART2_IRQn);
 	__HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE); 
-	
+		__HAL_UART_ENABLE_IT(&huart2, UART_IT_IDLE);	
 	
 	//MX_TIM21_Init();
 	if(MB_SPEED>8){MB_SPEED=2;}
@@ -1122,9 +1473,7 @@ int main(void)
 
 
 	HAL_ADC_Start_DMA(&hadc,(uint32_t*)&adc1,3);
-
 	HAL_NVIC_SetPriority(RTC_IRQn, 0, 1); 
-
 	HAL_NVIC_EnableIRQ(RTC_IRQn); 
 
 	lamp=2;
@@ -1137,8 +1486,7 @@ int main(void)
   {
 
 		HAL_IWDG_Refresh(&hiwdg);
-		
-		
+				
 		if(mbReinitCnt>MBReinitTime)
 		{
 			mbReinitCnt=0;
@@ -1149,21 +1497,15 @@ int main(void)
 			HAL_NVIC_SetPriority(USART2_IRQn, 0, 1);
 			HAL_NVIC_EnableIRQ(USART2_IRQn);
 			__HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE);
+			__HAL_UART_ENABLE_IT(&huart2, UART_IT_IDLE);
 		}
 		
 		My_Jump_Boatloader();
 		Dot++;
 		
-		//if((Dot>PrevDot4-100&&Dot<PrevDot4+100)||(Dot>PrevDot42-100&&Dot<PrevDot42+100))
-		//{
 			now_vref=adc1[2];
 			now1=adc1[1]; //ampl
 			now2=adc1[0]; //rms
-		//}
-		/*now_vref=adc1[2];
-		now1=adc1[1]; //ampl
-		now2=adc1[0]; //rms*/
-		
 
 		if(Flag)
 		{
@@ -1183,15 +1525,9 @@ int main(void)
 				PrevDot4=PrevDot4+Dot/2;
 				Dot=0;
 				HAL_Delay(2);
-				//MaxS=0;
-				//Max_Max=0;
-				//Dooot=0;
-				//RMSS=0;
+
 			}
-			/*else if(Dot<5)
-			{
-				
-			}*/
+
 			else //if(notmore100(Dot,PrevDot))
 			{
 				if(max<MB_ATT_OFF&&A90&&AttPAftF==0&&FORCE_ATT==0)
@@ -1200,10 +1536,7 @@ int main(void)
 					A90=0;
 					FlagA90=1;
 				}
-				/*if(max>Max_Max)
-				{
-					Max_Max=max;
-				}*/
+
 				RMSS=now2;
 				if(!FlagMB2)
 				{
@@ -1224,10 +1557,6 @@ int main(void)
 					Max_RMSs=now2;
 				}
 				MaxS=max;
-				
-				
-				
-				
 				
 				if(max>0x0FFE)
 				{
@@ -1256,17 +1585,7 @@ int main(void)
 				
 				Dot=0;
 			}	
-			/*else
-			{
-				max=0;
-					
-				PrevDot=Dot;
-				PrevDot4=Dot/4;
-				PrevDot4=PrevDot4+Dot/2;
-				Dot=0;
-				Dooot=0;
-				RMSS=0;
-			}*/
+
 		}	
 		if(now1>max)
 		{
@@ -1284,11 +1603,6 @@ int main(void)
 		if(Dot>30000)
 		{
 			
-
-			
-			/*MB_RMS_NOW=now2;
-			MB_AMPL_NOW=max;
-			max=0;*/
 			MB_RMS_NOW=now2;
 			MB_AMPL_NOW=max;
 
@@ -1298,8 +1612,6 @@ int main(void)
 				A90=0;
 				FlagA90=1;
 			}
-			//RMSS=now2;
-			//MaxS=max;
 			
 			if(A90)
 			{
@@ -1319,6 +1631,16 @@ int main(void)
 			//MB04();
 			Max_Max=0;
 		}
+			 if(FlagMB3)
+				         { 
+						
+				   __HAL_UART_DISABLE_IT(&huart2, UART_IT_IDLE); 	
+									 
+								 IDLE_Handler();
+						 
+									 FlagMB3=0;
+										 
+				          } 
 
 
   /* USER CODE END WHILE */
@@ -1620,25 +1942,63 @@ void USART2_IRQHandler(void)
 {
 	if((USART2->ISR & USART_ISR_RXNE) == USART_ISR_RXNE)
 	{	
+				uint8_t buf = 0;
+		TIM2->CR1 &= (uint16_t)(~((uint16_t)TIM_CR1_CEN));
+		TIM2->CNT=0;
+
+		buf =(uint8_t)(USART2->RDR);
+		if(res_wr_index==0) {
+			 if (buf==MB_ADR||buf==247)
+			  {
+					      FlagIDLE=0;
+				   res_buffer[res_wr_index]=buf;
+				   res_wr_index++;	
+				           FlagMB=1;
+				    TIM2->CR1 |= TIM_CR1_CEN; 
+			   }
+			      else{
+					      FlagIDLE=1;
+			    }
+		  }
+		 else {
+			   if(FlagIDLE==0){
+				
+			         res_buffer[res_wr_index]=buf;
+			         if(res_wr_index<29) {
+				                      res_wr_index++;						
+			                  }
+			           FlagMB=1;
+			       TIM2->CR1 |= TIM_CR1_CEN; 			
+		      }
+			
+	     }
+  }		 
+	
+			 if((USART2->ISR & USART_ISR_IDLE) == USART_ISR_IDLE)
+	   {	
+			  	FlagMB3=1;
+		      FlagIDLE=0;
+					 __HAL_UART_CLEAR_FLAG(&huart2, UART_CLEAR_IDLEF);					 
+			     __HAL_UART_CLEAR_IDLEFLAG(&huart2);	
+
+     }	   
+	
+	  HAL_UART_IRQHandler(&huart2);
+ }
+	
+
+void TIM2_IRQHandler(void)
+{
+	TIM2->CR1 &= (uint16_t)(~((uint16_t)TIM_CR1_CEN));
+	HAL_TIM_IRQHandler(&htim2);
+
+		 HAL_NVIC_SetPriority(USART2_IRQn, 0, 1);
+    HAL_NVIC_EnableIRQ(USART2_IRQn);
+	__HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE);
+		__HAL_UART_ENABLE_IT(&huart2, UART_IT_IDLE);
 		
-			TIM2->CR1 &= (uint16_t)(~((uint16_t)TIM_CR1_CEN));
-			TIM2->CNT=0;
-			res_buffer[res_wr_index]=(uint8_t)(USART2->RDR);
-			//HAL_UART_Receive(&huart2, &x, 1, 100);
-			if(res_wr_index<29)
-			{
-				res_wr_index++;			
-			}
-			FlagMB=1;
-			TIM2->CR1 |= TIM_CR1_CEN; 
-	}
-	HAL_UART_IRQHandler(&huart2);
 }
-
-
-
-
-
+/*
 void TIM2_IRQHandler(void)
 {
 	TIM2->CR1 &= (uint16_t)(~((uint16_t)TIM_CR1_CEN));
@@ -1806,12 +2166,7 @@ void TIM2_IRQHandler(void)
 							reg_MB[res_buffer[3]+7]=(MB_AMPL_NOW&0x0FFF)-MB_AMPL_ZERO;
 							//reg_MB[res_buffer[3]-1]=res_buffer[4]*0x100+res_buffer[5];
 						}
-						/*else if(res_buffer[3]==9)
-						{
-							reg_MB[res_buffer[3]+8]=MB_RMS_NOW&0x0FFF;
-							reg_MB[res_buffer[3]+7]=MB_AMPL_NOW&0x0FFF;
-							reg_MB[res_buffer[3]-1]=res_buffer[4]*0x100+res_buffer[5];
-						}*/
+
 						else if(res_buffer[3]==10)
 						{
 							reg_MB[res_buffer[3]+8]=MB_HZ_1;
@@ -1935,38 +2290,7 @@ void TIM2_IRQHandler(void)
 				}	
 				break;
 			}
-			/*case 0x42:  //завод
-			{
-				write_buffer[0]=res_buffer[0];					// адрес блока
-				write_buffer[1]=res_buffer[1];						// та-же функция 
-				CRCCod=CRC16(write_buffer, 2);				// расчет CRC
-				write_buffer[2] = CRCCod & 0x00FF;			// мл. байт CRC
-				write_buffer[3] = CRCCod >> 8;				// ст. байт CRC
-				
-				MB_AMPL_ZERO=0;
-				MB_RMS_ZERO=0;
-
-				MB_RMS_N_I=0x1000;
-				MB_RMS_N_F=0x1001;
-				MB_RMS_O_I=0x1000;
-				MB_RMS_O_F=0x1002;
-				
-				MB_AMPL_N_I=0x1000;
-				MB_AMPL_N_F=0x1001;
-				MB_AMPL_O_I=0x1000;
-				MB_AMPL_O_F=0x1002;
-				
-				MB_ADR=247;
-				MB_SPEED=2;
-				//reg_MB[17]=10;
-				
-				MB_HZ_I=0x5001;
-				MB_HZ_F=0x5001;
-				Write_Flash();
-				
-				HAL_UART_Transmit(&huart2,write_buffer,4,100);
-				break;
-			}*/
+	
 			case 0x45:
 			{
 				
@@ -2040,6 +2364,7 @@ void TIM2_IRQHandler(void)
 	__HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE);
 
 }
+*/
 
 void TIM21_IRQHandler(void)
 {
@@ -2211,17 +2536,9 @@ void _Error_Handler(char *file, int line)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
-
-    if (MB_ERR_HANDLER > 10000) {
-		                      MB_ERR_HANDLER = 0;
-	       }
-		
-		 else {
-	            MB_ERR_HANDLER = MB_ERR_HANDLER + 1;
-		 }
-	//while(1)
-  //{
-  // }
+  while(1)
+  {
+  }
   /* USER CODE END Error_Handler_Debug */
 }
 
